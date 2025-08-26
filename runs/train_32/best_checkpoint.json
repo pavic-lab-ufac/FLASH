@@ -1,0 +1,2 @@
+best epoch:16
+Validation set: Average PSNR: 43.4834, PSNR_mu: 44.7027, SSIM_l: 0.9918, SSIM_mu: 0.9945, isTLC:False

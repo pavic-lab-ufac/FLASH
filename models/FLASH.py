@@ -1,0 +1,489 @@
+import math
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import torch.utils.checkpoint as checkpoint
+from einops import rearrange
+from mamba_ssm import Mamba
+import numpy as np
+from torchvision.ops import DeformConv2d
+
+
+class VisionMambaEncoder2D(nn.Module):
+    def __init__(self, channels, ssm_config=None):
+        super().__init__()
+        self.norm = nn.LayerNorm(channels)
+
+        # Proyecciones lineales
+        self.to_x = nn.Conv2d(channels, channels, kernel_size=1)
+        self.to_z = nn.Conv2d(channels, channels, kernel_size=1)
+
+        # Horizontal convoluciones
+        self.forward_conv_h = nn.Conv2d(
+            channels, channels, kernel_size=(1, 3), padding=(0, 1), groups=channels
+        )
+        self.backward_conv_h = nn.Conv2d(
+            channels, channels, kernel_size=(1, 3), padding=(0, 1), groups=channels
+        )
+
+        # Vertical convoluciones
+        self.forward_conv_v = nn.Conv2d(
+            channels, channels, kernel_size=(3, 1), padding=(1, 0), groups=channels
+        )
+        self.backward_conv_v = nn.Conv2d(
+            channels, channels, kernel_size=(3, 1), padding=(1, 0), groups=channels
+        )
+
+        # SSMs (uno por dirección)
+        self.forward_ssm_h = Mamba(d_model=channels, **(ssm_config or {}))
+        self.backward_ssm_h = Mamba(d_model=channels, **(ssm_config or {}))
+        self.forward_ssm_v = Mamba(d_model=channels, **(ssm_config or {}))
+        self.backward_ssm_v = Mamba(d_model=channels, **(ssm_config or {}))
+
+        self.activation = nn.GELU()
+        self.output_proj = nn.Conv2d(channels, channels, kernel_size=1)
+
+    def forward(self, x):
+        B, C, H, W = x.shape
+
+        # LayerNorm por canal
+        x_perm = x.permute(0, 2, 3, 1)  # [B, H, W, C]
+        x_norm = self.norm(x_perm).permute(0, 3, 1, 2)  # [B, C, H, W]
+
+        x_proj = self.to_x(x_norm)
+        z_proj = self.to_z(x_norm)
+        z_activated = self.activation(z_proj)
+
+        # === Horizontal ===
+        # Forward
+        h_fwd_h = self.forward_conv_h(x_proj)
+        h_fwd_h = h_fwd_h.flatten(2).transpose(1, 2)  # [B, H*W, C]
+        h_fwd_h = self.forward_ssm_h(h_fwd_h).transpose(1, 2).reshape(B, C, H, W)
+
+        # Backward
+        x_flip_w = torch.flip(x_proj, dims=[3])
+        h_bwd_h = self.backward_conv_h(x_flip_w)
+        h_bwd_h = h_bwd_h.flatten(2).transpose(1, 2)
+        h_bwd_h = self.backward_ssm_h(h_bwd_h).transpose(1, 2).reshape(B, C, H, W)
+        h_bwd_h = torch.flip(h_bwd_h, dims=[3])
+
+        # === Vertical ===
+        # Forward
+        h_fwd_v = self.forward_conv_v(x_proj)
+        h_fwd_v = h_fwd_v.permute(0, 3, 2, 1).reshape(B * W, H, C)  # eje H
+        h_fwd_v = self.forward_ssm_v(h_fwd_v).reshape(B, W, H, C).permute(0, 3, 2, 1)
+
+        # Backward
+        x_flip_h = torch.flip(x_proj, dims=[2])
+        h_bwd_v = self.backward_conv_v(x_flip_h)
+        h_bwd_v = h_bwd_v.permute(0, 3, 2, 1).reshape(B * W, H, C)
+        h_bwd_v = self.backward_ssm_v(h_bwd_v).reshape(B, W, H, C).permute(0, 3, 2, 1)
+        h_bwd_v = torch.flip(h_bwd_v, dims=[2])
+
+        # Combinación
+        y = (h_fwd_h + h_bwd_h + h_fwd_v + h_bwd_v) * z_activated
+
+        # Proyección y conexión residual
+        y = self.output_proj(y)
+        return torch.clamp(y + x, -100, 100)
+
+
+def check_image_size(x, window_size):
+    _, _, h, w = x.size()
+    mod_pad_h = (window_size - h % window_size) % window_size
+    mod_pad_w = (window_size - w % window_size) % window_size
+    x = F.pad(x, (0, mod_pad_w, 0, mod_pad_h), "reflect")
+    return x
+
+
+def window_partition(x, window_size):
+    """
+    Divide la imagen en ventanas (parches) de tamaño fijo.
+
+    Args:
+        x: (B, C, H, W) - Tensor de entrada con canales primero.
+        window_size (int): Tamaño de la ventana (parche).
+
+    Returns:
+        windows: (num_windows*B, C, window_size, window_size) - Ventanas reorganizadas.
+    """
+    B, C, H, W = x.shape
+    x = x.view(B, C, H // window_size, window_size, W // window_size, window_size)
+    windows = (
+        x.permute(0, 2, 4, 1, 3, 5).contiguous().view(-1, C, window_size, window_size)
+    )
+    return windows
+
+
+def window_reverse(windows, window_size, H, W):
+    """
+    Reconstruye la imagen original a partir de las ventanas (parches).
+
+    Args:
+        windows: (num_windows*B, C, window_size, window_size) - Ventanas reorganizadas.
+        window_size (int): Tamaño de la ventana (parche).
+        H (int): Altura de la imagen original.
+        W (int): Ancho de la imagen original.
+
+    Returns:
+        x: (B, C, H, W) - Imagen reconstruida.
+    """
+    B = int(
+        windows.shape[0] / ((H * W) / (window_size * window_size))
+    )  # Calcula el batch size original
+    C = windows.shape[1]  # Número de canales
+    x = windows.view(B, H // window_size, W // window_size, C, window_size, window_size)
+    x = x.permute(0, 3, 1, 4, 2, 5).contiguous().view(B, C, H, W)
+    return x
+
+
+class MambaFeatureRefiner(nn.Module):
+    def __init__(self, dim, dconv, expand):
+        super().__init__()
+
+        self.mamba = Mamba(d_model=dim, d_state=16, d_conv=dconv, expand=expand)
+        self.ln = nn.LayerNorm(normalized_shape=dim)
+        self.softmax = nn.Softmax(dim=-1)  # Softmax en la dimensión de la secuencia
+
+    def forward(self, x):
+        b, c, w, h = x.shape
+        x = x.view(b, c, -1).transpose(1, 2)
+        x = self.ln(x)
+        x = self.mamba(x)
+        att = self.softmax(x)
+        x = x * att
+        x = x.transpose(1, 2).view(b, c, w, h)
+        return x
+
+
+class BidirectionalVisionMamba(nn.Module):
+    def __init__(self, dim, d_conv=4, expand=2):
+        super().__init__()
+
+        # Mambas para diferentes direcciones
+        self.mamba_h = Mamba(d_model=dim, d_state=16, d_conv=d_conv, expand=expand)
+        self.mamba_v = Mamba(d_model=dim, d_state=16, d_conv=d_conv, expand=expand)
+
+        self.norm = nn.LayerNorm(dim)
+        self.proj = nn.Linear(2 * dim, dim)  # Combinar ambas direcciones
+
+    def forward(self, x):
+        B, C, H, W = x.shape
+
+        # Procesamiento horizontal (por filas)
+        x_h = x.permute(0, 2, 3, 1).reshape(B, H * W, C)
+        x_h = self.norm(x_h)
+        x_h = self.mamba_h(x_h)
+
+        # Procesamiento vertical (por columnas)
+        x_v = x.permute(0, 3, 2, 1).reshape(B, W * H, C)
+        x_v = self.norm(x_v)
+        x_v = self.mamba_v(x_v)
+
+        # Combinar resultados
+        x = torch.cat([x_h, x_v], dim=-1)
+        x = self.proj(x)
+
+        # Volver a forma original
+        x = x.reshape(B, H, W, C).permute(0, 3, 1, 2)
+
+        return x
+
+
+class SAM(nn.Module):
+    def __init__(self, bias=False):
+        super(SAM, self).__init__()
+        self.bias = bias
+        self.conv = nn.Conv2d(
+            in_channels=2,
+            out_channels=1,
+            kernel_size=7,
+            stride=1,
+            padding=3,
+            dilation=1,
+            bias=self.bias,
+        )
+
+    def forward(self, x):
+        max = torch.max(x, 1)[0].unsqueeze(1)
+        avg = torch.mean(x, 1).unsqueeze(1)
+        concat = torch.cat((max, avg), dim=1)
+        output = self.conv(concat)
+        output = F.sigmoid(output) * x
+        return output
+
+
+class CAM(nn.Module):
+    def __init__(self, channels, r):
+        super(CAM, self).__init__()
+        self.channels = channels
+        self.r = r
+        self.linear = nn.Sequential(
+            nn.Linear(
+                in_features=self.channels,
+                out_features=self.channels // self.r,
+                bias=True,
+            ),
+            nn.ReLU(inplace=True),
+            nn.Linear(
+                in_features=self.channels // self.r,
+                out_features=self.channels,
+                bias=True,
+            ),
+        )
+
+    def forward(self, x):
+        max = F.adaptive_max_pool2d(x, output_size=1)
+        avg = F.adaptive_avg_pool2d(x, output_size=1)
+        b, c, _, _ = x.size()
+        linear_max = self.linear(max.view(b, c)).view(b, c, 1, 1)
+        linear_avg = self.linear(avg.view(b, c)).view(b, c, 1, 1)
+        output = linear_max + linear_avg
+        output = F.sigmoid(output) * x
+        return output
+
+
+class CBAM(nn.Module):
+    def __init__(self, channels, r):
+        super(CBAM, self).__init__()
+        self.channels = channels
+        self.r = r
+        self.sam = SAM(bias=False)
+        self.cam = CAM(channels=self.channels, r=self.r)
+
+    def forward(self, x):
+        output = self.cam(x)
+        output = self.sam(output)
+        return output + x
+
+
+class SFTLayer(nn.Module):
+    def __init__(self, x0_ch, x1_ch):
+        super(SFTLayer, self).__init__()
+        self.SFT_scale_conv0 = nn.Conv2d(x1_ch, x0_ch, 1)
+        self.SFT_scale_conv1 = nn.Conv2d(x0_ch, x0_ch, 1)
+        self.SFT_shift_conv0 = nn.Conv2d(x1_ch, x0_ch, 1)
+        self.SFT_shift_conv1 = nn.Conv2d(x0_ch, x0_ch, 1)
+
+    def forward(self, x0, x1):
+        """Caracteristicas de x0 condicionadas con x1"""
+        scale = self.SFT_scale_conv1(
+            F.leaky_relu(self.SFT_scale_conv0(x1), 0.1, inplace=True)
+        )
+        shift = self.SFT_shift_conv1(
+            F.leaky_relu(self.SFT_shift_conv0(x1), 0.1, inplace=True)
+        )
+        return x0 * (scale + 1) + shift
+
+
+class DCRB(nn.Module):
+    def __init__(self, x0_ch, x1_ch):
+        super(DCRB, self).__init__()
+        dch = 2 * 3 * 3
+        self.offset = nn.Conv2d(x0_ch, dch, 3, 1, 1, bias=True)
+
+        self.sft1 = SFTLayer(x0_ch, x1_ch)
+        self.dconv1 = DeformConv2d(x0_ch, x0_ch, 3, 1, 1)  # Todo :DCONV
+        self.sft2 = SFTLayer(x0_ch, x1_ch)
+        self.dconv2 = DeformConv2d(x0_ch, x0_ch, 3, 1, 1)  # Todo :DCONV
+
+    def forward(self, x0, x1):
+        # x[0]: fea; x[1]: cond
+        off = self.offset(x0)
+        fea = self.sft1(x0, x1)
+        fea = F.relu(self.dconv1(fea, off), inplace=True)
+        fea = self.sft2(fea, x1)
+        fea = self.dconv2(fea, off)
+        return x0 + fea
+
+
+class ResBlock(nn.Module):
+    def __init__(self, channels, dilation=1, bias=True):
+        super(ResBlock, self).__init__()
+        self.conv1 = nn.Sequential(
+            nn.Conv2d(
+                channels,
+                channels,
+                kernel_size=3,
+                stride=1,
+                padding=dilation,
+                dilation=dilation,
+                bias=bias,
+            ),
+            nn.PReLU(channels),
+        )
+        self.conv2 = nn.Conv2d(
+            channels,
+            channels,
+            kernel_size=3,
+            stride=1,
+            padding=dilation,
+            dilation=dilation,
+            bias=bias,
+        )
+        self.prelu = nn.PReLU(channels)
+
+    def forward(self, x):
+        out = self.conv1(x)
+        out = self.conv2(out)
+        out = self.prelu(x + out)
+        return out
+
+
+class AlignNet(nn.Module):
+    def __init__(self, x0_ch, x1_ch, n_layers):
+        super().__init__()
+        self.lowAlign = nn.ModuleList()
+        self.highAlign = nn.ModuleList()
+
+        for _ in range(n_layers):
+            low = DCRB(x0_ch, x1_ch)
+            high = DCRB(x0_ch, x1_ch)
+            self.lowAlign.append(low)
+            self.highAlign.append(high)
+
+    def forward(self, x1, x2, x3):
+        for low, high in zip(self.lowAlign, self.highAlign):
+            x1 = low(x1, x2)
+            x3 = high(x3, x2)
+        return x1, x2, x3
+
+
+class FLASH(nn.Module):
+    r""" """
+
+    def __init__(
+        self,
+        ch_in=6,
+        ch_out=3,
+        dim_f=20,
+        dim_c=40,
+        align_layers=4,
+        layers=2,
+    ):
+        super(FLASH, self).__init__()
+        self.feat_1 = nn.Sequential(
+            nn.Conv2d(ch_in, dim_f, 3, 1, 1),
+            nn.PReLU(dim_f),
+        )
+        self.feat_2 = nn.Sequential(
+            nn.Conv2d(ch_in, dim_c, 3, 1, 1),
+            nn.PReLU(dim_c),
+        )
+        self.feat_3 = nn.Sequential(
+            nn.Conv2d(ch_in, dim_f, 3, 1, 1),
+            nn.PReLU(dim_f),
+        )
+
+        # self.align = AlignNet(dim_f, dim_c, align_layers)
+
+        self.mambablocks = nn.ModuleList()
+        self.lowAlign = nn.ModuleList()
+        self.highAlign = nn.ModuleList()
+        self.conBlock = nn.ModuleList()
+
+        for _ in range(layers):
+            mam = nn.Sequential(
+                VisionMambaEncoder2D(dim_c),
+                VisionMambaEncoder2D(dim_c),
+            )
+            low = DCRB(dim_f, dim_c)
+            high = DCRB(dim_f, dim_c)
+            con = nn.Sequential(
+                nn.Conv2d(dim_c + dim_f + dim_f, dim_c, 3, 1, 1),
+                nn.PReLU(dim_c),
+                ResBlock(dim_c),
+            )
+
+            self.mambablocks.append(mam)
+            self.lowAlign.append(low)
+            self.highAlign.append(high)
+            self.conBlock.append(con)
+
+        self.conv_end = nn.Conv2d(dim_c, ch_out, 3, 1, 1)
+
+    def forward(self, x1, x2, x3, isTLC=False, TLC=128):
+
+        if isTLC:
+            x = torch.cat((x1, x2, x3), 1)
+            H, W = x.shape[2:]
+            x = check_image_size(x, TLC)
+            Hp, Wp = x.shape[2:]
+            x1, x2, x3 = x.chunk(3, 1)
+            x1 = window_partition(x1, TLC)
+            x2 = window_partition(x2, TLC)
+            x3 = window_partition(x3, TLC)
+
+        x1 = self.feat_1(x1)
+        x2 = self.feat_2(x2)
+        x3 = self.feat_3(x3)
+
+        skip = x2
+
+        for mambablock, low, high, conv in zip(
+            self.mambablocks,
+            self.lowAlign,
+            self.highAlign,
+            self.conBlock,
+        ):
+            x1 = low(x1, x2)
+            x3 = high(x3, x2)
+            x = torch.cat((x1, x2, x3), 1)
+            x = conv(x)
+            x2 = x * torch.sigmoid(mambablock(x))
+
+        x = x2 + skip
+        x = self.conv_end(x)
+
+        if isTLC:
+            x = window_reverse(x, TLC, Hp, Wp)
+            return torch.sigmoid(x[:, :, :H, :W])
+
+        return torch.sigmoid(x)
+
+
+if __name__ == "__main__":
+
+    import pynvml
+    import time
+    from thop import profile
+
+    model = FLASH().cuda().eval()
+
+    w = 1500
+    h = 1000
+    img0_c = torch.randn(1, 6, h, w).cuda()
+    img1_c = torch.randn(1, 6, h, w).cuda()
+    img2_c = torch.randn(1, 6, h, w).cuda()
+
+    pynvml.nvmlInit()
+    handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+    gpuName = pynvml.nvmlDeviceGetName(handle)
+    print(gpuName)
+
+    with torch.no_grad():
+        for i in range(2):
+            out = model(img0_c, img1_c, img2_c)
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        time_stamp = time.time()
+        for i in range(10):
+            out = model(img0_c, img1_c, img2_c)
+        if torch.cuda.is_available():
+            torch.cuda.synchronize()
+        print("Time: {:.2f}s of 0.12s".format((time.time() - time_stamp) / 10))
+
+    flops, params = profile(model, inputs=(img0_c, img1_c, img2_c), verbose=False)
+    print(
+        "FLOPs: {:.3f}T of 0.976T\nParams: {:.2f}M of 1.12M".format(
+            flops / 1000 / 1000 / 1000 / 1000, params / 1000 / 1000
+        )
+    )
+    print(out.shape)
+    ##SAFNET 0.776 seconds, 0.976 TFlops, 1.12 MParams 1500x1000
+    ##
+    """
+    model = FLASH()
+    x = torch.randn((1, 6, 128, 128))
+    x = model(x, x, x)
+    print(x.shape)"""

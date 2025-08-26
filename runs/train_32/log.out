@@ -1,0 +1,56 @@
+===> Loading checkpoint from: /home/urso/PavicHDR/runs_4/train_28/best_checkpoint.pth
+===> Loaded checkpoint: epoch 63
+===> Start training 
+
+        Log dir:         /home/urso/PavicHDR/runs_4/train_32
+        Dataset dir:     /home/urso/Datasets/Kalantari/
+        Subset:          sig17_training_crop500_stride250
+        Epochs:          10000
+        Batch size:      4
+        Lr0:             5e-06
+        Lrf:             5e-07
+        Lr_interval:     50
+        Training size:   3330
+        Device:          cuda
+        FLOPs (T):       0.52
+        Params (M):      0.82
+        
+==Validation==	PSNR_l: 43.1022	 PSNR_mu: 44.4457	 SSIM_l: 0.9908	 SSIM_mu: 0.9940	Loss: 0.006348
+Train Epoch: 0 [3332/3330 (100 %)]	Loss: 0.004877	Time: 786.745	lr: 0.000005
+==Validation==	PSNR_l: 43.3648	 PSNR_mu: 44.5680	 SSIM_l: 0.9920	 SSIM_mu: 0.9944	Loss: 0.006120
+Train Epoch: 1 [3332/3330 (100 %)]	Loss: 0.004816	Time: 784.387	lr: 0.000005
+==Validation==	PSNR_l: 43.4080	 PSNR_mu: 44.6271	 SSIM_l: 0.9918	 SSIM_mu: 0.9944	Loss: 0.006088
+Train Epoch: 2 [3332/3330 (100 %)]	Loss: 0.004799	Time: 784.193	lr: 0.000005
+==Validation==	PSNR_l: 43.4536	 PSNR_mu: 44.6005	 SSIM_l: 0.9918	 SSIM_mu: 0.9944	Loss: 0.006088
+Train Epoch: 3 [3332/3330 (100 %)]	Loss: 0.004785	Time: 785.049	lr: 0.000005
+==Validation==	PSNR_l: 43.4541	 PSNR_mu: 44.6576	 SSIM_l: 0.9919	 SSIM_mu: 0.9944	Loss: 0.006047
+Train Epoch: 4 [3332/3330 (100 %)]	Loss: 0.004777	Time: 785.276	lr: 0.000005
+==Validation==	PSNR_l: 43.4674	 PSNR_mu: 44.6290	 SSIM_l: 0.9919	 SSIM_mu: 0.9944	Loss: 0.006074
+Train Epoch: 5 [3332/3330 (100 %)]	Loss: 0.004769	Time: 784.600	lr: 0.000005
+==Validation==	PSNR_l: 43.4728	 PSNR_mu: 44.6634	 SSIM_l: 0.9918	 SSIM_mu: 0.9944	Loss: 0.006045
+Train Epoch: 6 [3332/3330 (100 %)]	Loss: 0.004763	Time: 784.355	lr: 0.000005
+==Validation==	PSNR_l: 43.4484	 PSNR_mu: 44.6783	 SSIM_l: 0.9919	 SSIM_mu: 0.9945	Loss: 0.006032
+Train Epoch: 7 [3332/3330 (100 %)]	Loss: 0.004755	Time: 783.009	lr: 0.000005
+==Validation==	PSNR_l: 43.4690	 PSNR_mu: 44.6805	 SSIM_l: 0.9918	 SSIM_mu: 0.9945	Loss: 0.006030
+Train Epoch: 8 [3332/3330 (100 %)]	Loss: 0.004751	Time: 785.462	lr: 0.000005
+==Validation==	PSNR_l: 43.4803	 PSNR_mu: 44.6668	 SSIM_l: 0.9918	 SSIM_mu: 0.9944	Loss: 0.006042
+Train Epoch: 9 [3332/3330 (100 %)]	Loss: 0.004746	Time: 785.523	lr: 0.000005
+==Validation==	PSNR_l: 43.4617	 PSNR_mu: 44.6864	 SSIM_l: 0.9919	 SSIM_mu: 0.9945	Loss: 0.006021
+Train Epoch: 10 [3332/3330 (100 %)]	Loss: 0.004740	Time: 784.338	lr: 0.000005
+==Validation==	PSNR_l: 43.4656	 PSNR_mu: 44.6786	 SSIM_l: 0.9919	 SSIM_mu: 0.9945	Loss: 0.006022
+Train Epoch: 11 [3332/3330 (100 %)]	Loss: 0.004741	Time: 784.982	lr: 0.000004
+==Validation==	PSNR_l: 43.4715	 PSNR_mu: 44.6849	 SSIM_l: 0.9918	 SSIM_mu: 0.9945	Loss: 0.006028
+Train Epoch: 12 [3332/3330 (100 %)]	Loss: 0.004733	Time: 784.587	lr: 0.000004
+==Validation==	PSNR_l: 43.4331	 PSNR_mu: 44.6807	 SSIM_l: 0.9918	 SSIM_mu: 0.9945	Loss: 0.006026
+Train Epoch: 13 [3332/3330 (100 %)]	Loss: 0.004731	Time: 783.177	lr: 0.000004
+==Validation==	PSNR_l: 43.4764	 PSNR_mu: 44.6894	 SSIM_l: 0.9918	 SSIM_mu: 0.9945	Loss: 0.006025
+Train Epoch: 14 [3332/3330 (100 %)]	Loss: 0.004724	Time: 784.146	lr: 0.000004
+==Validation==	PSNR_l: 43.4785	 PSNR_mu: 44.6862	 SSIM_l: 0.9918	 SSIM_mu: 0.9944	Loss: 0.006025
+Train Epoch: 15 [3332/3330 (100 %)]	Loss: 0.004724	Time: 785.924	lr: 0.000004
+==Validation==	PSNR_l: 43.4834	 PSNR_mu: 44.7027	 SSIM_l: 0.9918	 SSIM_mu: 0.9945	Loss: 0.006009
+Train Epoch: 16 [3332/3330 (100 %)]	Loss: 0.004721	Time: 784.731	lr: 0.000004
+==Validation==	PSNR_l: 43.4573	 PSNR_mu: 44.6851	 SSIM_l: 0.9917	 SSIM_mu: 0.9944	Loss: 0.006024
+Train Epoch: 17 [3332/3330 (100 %)]	Loss: 0.004717	Time: 785.338	lr: 0.000004
+==Validation==	PSNR_l: 43.4319	 PSNR_mu: 44.6691	 SSIM_l: 0.9917	 SSIM_mu: 0.9944	Loss: 0.006030
+Train Epoch: 18 [3332/3330 (100 %)]	Loss: 0.004715	Time: 782.807	lr: 0.000004
+==Validation==	PSNR_l: 43.4493	 PSNR_mu: 44.6765	 SSIM_l: 0.9916	 SSIM_mu: 0.9944	Loss: 0.006039

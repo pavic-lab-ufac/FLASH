@@ -1,0 +1,38 @@
+ 
+:: initializing oneAPI environment ...
+   slurm_script: BASH_VERSION = 4.4.20(1)-release
+   args: Using "$@" for setvars.sh arguments: 
+:: advisor -- latest
+:: ccl -- latest
+:: clck -- latest
+:: compiler -- latest
+:: dal -- latest
+:: debugger -- latest
+:: dev-utilities -- latest
+:: dnnl -- latest
+:: dpcpp-ct -- latest
+:: dpl -- latest
+:: inspector -- latest
+:: ipp -- latest
+:: ippcp -- latest
+:: ipp -- latest
+:: itac -- latest
+:: mkl -- latest
+:: mpi -- latest
+:: tbb -- latest
+:: vtune -- latest
+:: oneAPI environment initialized ::
+ 
+job start time is Mon Jul 28 10:18:31 -05 2025
++ srun -N1 -n1 --cpu_bind=cores -l --nodelist=gn01 --cpus-per-task=16 singularity exec --nv -B /home/urso -B /scratch --pwd /home/urso//home/urso/FLASH /home/urso/.lico/container/Python.sif bash -c '
+    
+    . /home/urso/PavicHDR/venv/bin/activate
+
+    python /home/urso/FLASH-SI/dataset/gen_crop_data.py \    
+    '
+0: usage: gen_crop_data.py [-h] [--data_root DATA_ROOT] [--patch_size PATCH_SIZE]
+0:                         [--stride STRIDE] [--aug]
+0: gen_crop_data.py: error: unrecognized arguments:  
+srun: error: gn01: task 0: Exited with exit code 2
++ set +x
+job end time is Mon Jul 28 10:18:33 -05 2025
